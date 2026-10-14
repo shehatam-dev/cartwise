@@ -39,7 +39,10 @@ class GeminiClient:
                 contents.append(t.Content(role="user", parts=[t.Part(text=m.content)]))
             else:
                 parts = [t.Part(text=m.content)] if m.content else []
-                parts += [t.Part(function_call=t.FunctionCall(name=c.name, args=c.args)) for c in m.tool_calls]
+                # Thinking models sign each call; replaying the signature keeps their reasoning
+                # across steps, and Gemini 3 rejects function-call history without it.
+                parts += [t.Part(function_call=t.FunctionCall(name=c.name, args=c.args),
+                                 thought_signature=c.extra.get("thought_signature")) for c in m.tool_calls]
                 contents.append(t.Content(role="model", parts=parts))
         if pending:
             contents.append(t.Content(role="user", parts=pending))
@@ -57,7 +60,15 @@ class GeminiClient:
             automatic_function_calling=t.AutomaticFunctionCallingConfig(disable=True),
         )
         resp = self._client.models.generate_content(model=self.model, contents=self._contents(messages), config=config)
-        calls = [ToolCall(name=fc.name, args=dict(fc.args or {})) for fc in (resp.function_calls or [])]
+        return self._parse(resp)
+
+    def _parse(self, resp) -> LLMResponse:
+        # Read the parts rather than `resp.function_calls`, which drops each call's thought signature.
+        content = resp.candidates[0].content if resp.candidates else None
+        parts = (content.parts if content else None) or []
+        calls = [ToolCall(name=p.function_call.name, args=dict(p.function_call.args or {}),
+                          extra={"thought_signature": p.thought_signature} if p.thought_signature else {})
+                 for p in parts if p.function_call]
         usage = resp.usage_metadata
         return LLMResponse(
             text="" if calls else (resp.text or ""),

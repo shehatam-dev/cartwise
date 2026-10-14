@@ -42,7 +42,7 @@ class Catalog:
         self.categories = sorted({p.category for p in products})
 
     @classmethod
-    def from_json(cls, path: str | Path | None = None) -> "Catalog":
+    def from_json(cls, path: str | Path | None = None) -> Catalog:
         if path is None:
             raw = resources.files("cartwise").joinpath("data/catalog.json").read_text()
         else:

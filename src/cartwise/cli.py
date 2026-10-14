@@ -31,7 +31,7 @@ def cmd_ask(args) -> int:
     feedback.log_run(args.question, result)
     _print_result(result)
     flush()
-    return 0
+    return 1 if "llm_error" in result.flags else 0
 
 
 def cmd_chat(args) -> int:
@@ -58,6 +58,11 @@ def cmd_eval(args) -> int:
     cases = load_cases(*paths, include_drafts=args.include_drafts)
     if args.tag:
         cases = [c for c in cases if args.tag in c.get("tags", [])]
+    if not cases:
+        print(f"No eval cases found in {', '.join(map(str, paths))}"
+              + (f" with tag '{args.tag}'" if args.tag else "")
+              + ". Run from the repo root or pass case files.", file=sys.stderr)
+        return 2
     judge = None
     if args.judge == "heuristic":
         judge = HeuristicJudge()

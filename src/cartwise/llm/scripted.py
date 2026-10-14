@@ -11,7 +11,7 @@ import json
 import re
 from dataclasses import dataclass
 
-from ..guardrails import REDACTED, find_injection
+from ..guardrails import REDACTED, REFUSAL, find_injection
 from ..text import money, tokenize
 from .base import LLMResponse, Message, ToolCall
 
@@ -102,8 +102,7 @@ class ScriptedLLM:
     def _plan(self, intent: _Intent, text: str, results: dict) -> list[ToolCall] | str:
         k = intent.kind
         if k == "refuse_injection":
-            return ("I can't help with that request. I'm here to help you shop: finding products, "
-                    "checking stock and answering questions about our policies.")
+            return REFUSAL
         if k == "refuse_checkout":
             return ("I can't take payment or place orders in this chat. You can review your cart and "
                     "check out securely on the cart page.")
@@ -115,7 +114,8 @@ class ScriptedLLM:
         if k == "cart":
             if "view_cart" not in results:
                 return [ToolCall("view_cart", {})]
-            return _cart_text(results["view_cart"][-1]["cart"])
+            out = results["view_cart"][-1]
+            return f"I couldn't do that: {out['error']}" if "error" in out else _cart_text(out["cart"])
         if k == "policy":
             if "search_policies" not in results:
                 return [ToolCall("search_policies", {"query": text, "k": 2})]

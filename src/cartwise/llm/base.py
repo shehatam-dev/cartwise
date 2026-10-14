@@ -12,6 +12,9 @@ class ToolCall:
     name: str
     args: dict
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:8])
+    # Opaque provider data that must be sent back with the call on the next request,
+    # e.g. Gemini's thought signature. The agent never reads it.
+    extra: dict = field(default_factory=dict)
 
 
 @dataclass

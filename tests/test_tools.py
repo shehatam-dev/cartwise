@@ -48,3 +48,22 @@ def test_policy_retrieval_finds_the_right_section():
 
 def test_policy_retrieval_returns_nothing_for_unrelated_query():
     assert BM25Retriever.from_policies().search("quantum chromodynamics") == []
+
+
+def test_array_items_are_type_checked(toolbox):
+    out = toolbox.call("compare_products", {"product_ids": [1, 2]})
+    assert "must be a list of strings" in out["error"]
+
+
+def test_compare_ignores_duplicate_ids(toolbox):
+    assert "between 2 and 4" in toolbox.call("compare_products", {"product_ids": ["aud-100", "aud-100"]})["error"]
+
+
+def test_a_crashing_tool_returns_an_error_instead_of_raising(toolbox, monkeypatch):
+    def boom(**_):
+        raise RuntimeError("disk on fire")
+
+    monkeypatch.setitem(toolbox._tools, "view_cart", toolbox._tools["view_cart"].__class__(
+        "view_cart", "", {"type": "object", "properties": {}}, boom))
+    assert toolbox.call("view_cart", {}) == {
+        "error": "Tool 'view_cart' failed (RuntimeError). Try a different request."}

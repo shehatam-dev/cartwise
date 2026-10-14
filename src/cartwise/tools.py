@@ -6,12 +6,16 @@ and every failure comes back as a structured `{"error": ...}` the model can reco
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any
 
 from .cart import Cart, CartError
 from .catalog import Catalog
 from .retrieval import Retriever
+
+log = logging.getLogger("cartwise")
 
 _JSON_TYPES = {"string": str, "number": (int, float), "integer": int, "boolean": bool, "array": list, "object": dict}
 
@@ -56,6 +60,10 @@ def validate_args(schema: dict, args: dict) -> dict:
             raise ToolArgumentError(f"'{key}' must be at least {rule['minimum']}")
         if "maximum" in rule and value > rule["maximum"]:
             raise ToolArgumentError(f"'{key}' must be at most {rule['maximum']}")
+        if rule["type"] == "array" and "items" in rule:
+            item_type = _JSON_TYPES[rule["items"]["type"]]
+            if not all(isinstance(v, item_type) and not isinstance(v, bool) for v in value):
+                raise ToolArgumentError(f"'{key}' must be a list of {rule['items']['type']}s")
         out[key] = value
     return out
 
@@ -77,6 +85,9 @@ class Toolbox:
             return tool.fn(**validate_args(tool.parameters, args or {}))
         except (ToolArgumentError, CartError) as exc:
             return {"error": str(exc)}
+        except Exception as exc:  # a bug in one tool must not end the conversation
+            log.exception("Tool '%s' failed", name)
+            return {"error": f"Tool '{name}' failed ({type(exc).__name__}). Try a different request."}
 
     # --- tool implementations -------------------------------------------------------------
 
@@ -96,6 +107,7 @@ class Toolbox:
         return {"id": product.id, "name": product.name, "in_stock": product.stock > 0, "quantity_available": product.stock}
 
     def _compare_products(self, product_ids: list) -> dict:
+        product_ids = list(dict.fromkeys(product_ids))  # comparing a product with itself is not a comparison
         if not 2 <= len(product_ids) <= 4:
             return {"error": "Compare between 2 and 4 products."}
         products, missing = [], []

@@ -7,6 +7,7 @@ model saw, what it asked for and what came back.
 from __future__ import annotations
 
 import json
+import logging
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -15,9 +16,9 @@ from opentelemetry import trace
 
 from .cart import Cart
 from .catalog import Catalog
-from .guardrails import find_injection, sanitize
+from .guardrails import REFUSAL, find_injection, sanitize
 from .llm.base import LLMClient, Message
-from .retrieval import BM25Retriever, Retriever
+from .retrieval import BM25Retriever
 from .tools import Toolbox
 
 SYSTEM_PROMPT = """You are Cartwise, a shopping assistant for an online store.
@@ -27,7 +28,10 @@ SYSTEM_PROMPT = """You are Cartwise, a shopping assistant for an online store.
 - Cite the policy source when you answer a policy question.
 - Keep answers short and specific."""
 
+log = logging.getLogger("cartwise")
+
 FALLBACK = "Sorry, I couldn't finish that request. Could you rephrase it or narrow it down?"
+LLM_UNAVAILABLE = "Sorry, I can't reach the assistant model right now. Please try again in a moment."
 
 
 @dataclass
@@ -59,7 +63,7 @@ class Agent:
         self.history: list[Message] = []
 
     @classmethod
-    def default(cls, llm: LLMClient, **kwargs) -> "Agent":
+    def default(cls, llm: LLMClient, **kwargs) -> Agent:
         return cls(llm, Toolbox(Catalog.from_json(), BM25Retriever.from_policies(), Cart()), **kwargs)
 
     def run(self, user_text: str) -> AgentResult:
@@ -70,12 +74,24 @@ class Agent:
             # Without a configured tracer provider the span is a no-op, so fall back to a random run id.
             result.trace_id = format(ctx.trace_id, "032x") if ctx.is_valid else uuid.uuid4().hex
             if find_injection(user_text):
-                result.flags.append("user_input_injection")
+                # Refused here, not by the model, so it holds whichever provider is configured.
+                # The attack also stays out of history, so it can't steer later turns.
+                result.answer, result.flags = REFUSAL, ["user_input_injection"]
+                return self._finish(span, result)
 
             messages = self.history + [Message("user", user_text)]
             for step in range(1, self.max_steps + 1):
                 result.steps = step
-                response = self._generate(messages, step)
+                try:
+                    response = self._generate(messages, step)
+                except Exception as exc:  # outage, quota, bad key or model name; the llm span records it
+                    # The shopper gets an apology; the operator gets the real cause, since a wrong
+                    # GEMINI_API_KEY would otherwise look exactly like an outage.
+                    log.error("Model call failed: %s: %s", type(exc).__name__, exc)
+                    span.set_status(trace.StatusCode.ERROR, type(exc).__name__)
+                    result.answer = LLM_UNAVAILABLE
+                    result.flags.append("llm_error")
+                    return self._finish(span, result)
                 if not response.tool_calls:
                     result.answer = response.text.strip() or FALLBACK
                     break
@@ -91,17 +107,23 @@ class Agent:
                 result.answer = FALLBACK
                 result.flags.append("max_steps_exceeded")
 
-            result.flags = sorted(set(result.flags))
             # Keep only the user/answer pairs in history so later turns stay small.
             self.history += [Message("user", user_text), Message("assistant", result.answer)]
-            span.set_attribute("cartwise.output", result.answer)
-            span.set_attribute("cartwise.steps", result.steps)
-            span.set_attribute("cartwise.flags", result.flags)
-            return result
+            return self._finish(span, result)
+
+    @staticmethod
+    def _finish(span, result: AgentResult) -> AgentResult:
+        result.flags = sorted(set(result.flags))
+        span.set_attribute("cartwise.output", result.answer)
+        span.set_attribute("cartwise.steps", result.steps)
+        span.set_attribute("cartwise.flags", result.flags)
+        return result
 
     def _generate(self, messages: list[Message], step: int):
         with self.tracer.start_as_current_span("llm.generate") as span:
-            span.set_attribute("gen_ai.system", self.llm.provider)
+            span.set_attribute("gen_ai.operation.name", "chat")
+            span.set_attribute("gen_ai.provider.name", self.llm.provider)
+            span.set_attribute("gen_ai.system", self.llm.provider)  # older name, still read by some backends
             span.set_attribute("gen_ai.request.model", self.llm.model)
             span.set_attribute("cartwise.step", step)
             response = self.llm.generate(self.system_prompt, messages, self.toolbox.specs())
@@ -112,6 +134,7 @@ class Agent:
 
     def _run_tool(self, name: str, args: dict) -> ToolRecord:
         with self.tracer.start_as_current_span(f"tool.{name}") as span:
+            span.set_attribute("gen_ai.operation.name", "execute_tool")
             span.set_attribute("gen_ai.tool.name", name)
             span.set_attribute("cartwise.tool.args", json.dumps(args))
             start = time.perf_counter()

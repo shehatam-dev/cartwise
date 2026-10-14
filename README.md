@@ -1,5 +1,7 @@
 # Cartwise
 
+[![ci](https://github.com/shehatam-dev/cartwise/actions/workflows/ci.yml/badge.svg)](https://github.com/shehatam-dev/cartwise/actions/workflows/ci.yml)
+
 A tool-calling shopping assistant, built to practice the parts of an LLM application that matter after the demo: tool design, retrieval, guardrails, tracing and evaluation.
 
 The store, brands and products are fictional. Everything runs offline with a deterministic scripted model, and switches to Google Gemini with one environment variable.
@@ -17,11 +19,11 @@ Opened laptops carry a 15% restocking fee unless the item is defective.
 
 | Area | What it does | Where |
 | --- | --- | --- |
-| Agent loop | The model proposes tool calls, the app runs them, and the loop repeats until an answer, with a step limit | `agent.py` |
-| Tools | 7 tools with JSON-schema specs; arguments are validated and every failure comes back as a structured error | `tools.py`, `cart.py` |
+| Agent loop | The model proposes tool calls, the app runs them, and the loop repeats until an answer, with a step limit; a provider outage becomes an apology, not a crash | `agent.py` |
+| Tools | 7 tools with JSON-schema specs; arguments are validated and every failure, including a bug inside a tool, comes back as a structured error | `tools.py`, `cart.py` |
 | Retrieval | BM25 over store policies, chunked by section, with cited sources | `retrieval.py` |
-| Guardrails | Prompt-injection text in tool output is redacted before the model sees it; injection and manipulation attempts in user input are refused | `guardrails.py` |
-| Tracing | OpenTelemetry spans for each turn, model call and tool call, using GenAI semantic-convention attributes; exports to the console or any OTLP backend, such as Langfuse | `tracing.py` |
+| Guardrails | Prompt-injection text in tool output is redacted before the model sees it; injection attempts in user input are refused in code before any model call, and kept out of chat history | `guardrails.py` |
+| Tracing | OpenTelemetry spans for each turn, model call and tool call, using GenAI semantic-convention attributes (`gen_ai.operation.name`, `gen_ai.provider.name`, token usage); exports to the console or any OTLP backend, such as Langfuse | `tracing.py` |
 | Evals | JSONL cases graded on tool use, required and forbidden content, price grounding and an LLM-as-judge groundedness score; the CLI exits non-zero below a pass threshold | `evals/` |
 | Feedback loop | Every run is logged; a thumbs-down becomes a draft regression case | `feedback.py` |
 | Providers | `scripted` (offline, deterministic) and `gemini` (google-genai function calling) behind one protocol | `llm/` |
@@ -50,7 +52,10 @@ cartwise ask "Noise cancelling headphones under \$100"
 cartwise chat
 cartwise eval                 # 17 cases, heuristic judge
 pytest                        # unit, adversarial and eval tests
+ruff check .
 ```
+
+`.env.example` lists every setting; nothing loads it automatically, so export the variables or `source` the file.
 
 ### Use Gemini
 
@@ -133,7 +138,8 @@ tests/              unit, adversarial and eval tests
 ## Design notes
 
 - **Business rules live in code, not the prompt.** The cart limit, stock checks and "no discounts" hold even if the model is talked into trying.
-- **The app runs the tools, not the SDK.** Automatic function calling is off, so every call is validated, traced and guarded.
+- **The refusal that matters most doesn't depend on the model.** User-input injection is caught before the provider is called, so the same attack is refused whether the scripted model or Gemini is configured, and it is kept out of chat history. Declining checkout or a discount is still the model's job (the system prompt asks it to), but the price itself can't move because no tool can change one.
+- **The app runs the tools, not the SDK.** Automatic function calling is off, so every call is validated, traced and guarded. Running the loop by hand means carrying Gemini's thought signatures from each function call into the next request, which thinking models need to keep their reasoning across steps.
 - **Tool output is untrusted.** Catalog text is treated like user-generated content. One product description contains an injection attempt on purpose, and the tests check it never reaches the model.
 - **The offline model is a test double.** The scripted provider speaks the same protocol as Gemini, so CI exercises the loop, tools, guardrails and evals without an API key or flaky outputs.
 

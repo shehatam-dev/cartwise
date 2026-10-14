@@ -51,8 +51,13 @@ class LLMJudge:
         match = re.search(r"\{.*\}", raw, re.S)
         if not match:
             return Verdict(1, 1, f"Judge returned no JSON: {raw[:80]}")
-        data = json.loads(match.group(0))
-        return Verdict(int(data["groundedness"]), int(data["helpfulness"]), str(data.get("reason", "")))
+        try:
+            data = json.loads(match.group(0))
+            scores = [min(5, max(1, int(data[k]))) for k in ("groundedness", "helpfulness")]
+        except (ValueError, KeyError, TypeError):
+            # A malformed verdict fails the case rather than crashing the whole suite.
+            return Verdict(1, 1, f"Judge returned unusable JSON: {raw[:80]}")
+        return Verdict(*scores, str(data.get("reason", "")))
 
 
 class HeuristicJudge:

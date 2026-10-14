@@ -49,3 +49,33 @@ def test_spans_cover_turn_model_and_tools(agent, spans):
     assert root.attributes["cartwise.steps"] == 3
     model_span = next(s for s in exporter.get_finished_spans() if s.name == "llm.generate")
     assert model_span.attributes["gen_ai.system"] == "scripted"
+
+
+class DownLLM:
+    provider, model = "test", "down"
+
+    def generate(self, system, messages, tools):
+        raise ConnectionError("503 from provider")
+
+
+def test_model_outage_is_reported_not_raised(toolbox, spans, caplog):
+    from cartwise.agent import LLM_UNAVAILABLE
+
+    provider, exporter = spans
+    result = Agent(DownLLM(), toolbox, tracer=provider.get_tracer("test")).run("headphones")
+    assert result.answer == LLM_UNAVAILABLE and result.flags == ["llm_error"]
+    assert "ConnectionError: 503 from provider" in caplog.text  # the operator sees the real cause
+    finished = {s.name: s for s in exporter.get_finished_spans()}
+    assert not finished["llm.generate"].status.is_ok and finished["llm.generate"].events[0].name == "exception"
+    assert not finished["agent.run"].status.is_ok
+
+
+def test_spans_carry_genai_semantic_conventions(agent, spans):
+    _, exporter = spans
+    agent.run("Add 2 Nomad Sling Bags to my cart")
+    finished = exporter.get_finished_spans()
+    llm = next(s for s in finished if s.name == "llm.generate")
+    tool = next(s for s in finished if s.name == "tool.add_to_cart")
+    assert llm.attributes["gen_ai.operation.name"] == "chat"
+    assert llm.attributes["gen_ai.provider.name"] == "scripted"
+    assert tool.attributes["gen_ai.operation.name"] == "execute_tool"

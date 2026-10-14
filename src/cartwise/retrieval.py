@@ -60,7 +60,7 @@ class BM25Retriever:
         self._idf = {t: math.log(1 + (n - f + 0.5) / (f + 0.5)) for t, f in df.items()}
 
     @classmethod
-    def from_policies(cls, directory: str | Path | None = None) -> "BM25Retriever":
+    def from_policies(cls, directory: str | Path | None = None) -> BM25Retriever:
         root = Path(directory) if directory else resources.files("cartwise").joinpath("data/policies")
         chunks = []
         for path in sorted(root.iterdir(), key=lambda p: p.name):
@@ -71,7 +71,7 @@ class BM25Retriever:
     def search(self, query: str, k: int = 3) -> list[Hit]:
         terms = tokenize(query)
         hits = []
-        for chunk, doc, length in zip(self.chunks, self._docs, self._lengths):
+        for chunk, doc, length in zip(self.chunks, self._docs, self._lengths, strict=True):
             score = 0.0
             for t in terms:
                 tf = doc.get(t, 0)

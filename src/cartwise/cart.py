@@ -29,4 +29,4 @@ class Cart:
     def snapshot(self) -> dict:
         lines = [{"id": p.id, "name": p.name, "quantity": q, "unit_price": p.price,
                   "line_total": round(p.price * q, 2)} for p, q in self._items.values()]
-        return {"items": lines, "subtotal": round(sum(l["line_total"] for l in lines), 2)}
+        return {"items": lines, "subtotal": round(sum(line["line_total"] for line in lines), 2)}

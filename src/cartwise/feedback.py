@@ -24,7 +24,7 @@ def _append(path: Path, row: dict) -> None:
 
 
 def _read(path: Path) -> list[dict]:
-    return [json.loads(l) for l in path.read_text().splitlines() if l.strip()] if path.exists() else []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
 
 
 def log_run(question: str, result: AgentResult, path: Path = TRANSCRIPTS) -> None:

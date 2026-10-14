@@ -63,3 +63,35 @@ def test_drafts_are_skipped(tmp_path):
     path.write_text('{"id": "a", "input": "x"}\n{"id": "b", "input": "y", "status": "draft"}\n')
     assert [c["id"] for c in load_cases(path)] == ["a"]
     assert len(load_cases(path, include_drafts=True)) == 2
+
+
+class BrokenJudgeLLM:
+    provider, model = "test", "judge"
+
+    def generate(self, system, messages, tools):
+        return LLMResponse(text='{"groundedness": "high", "helpfulness": }')
+
+
+def test_llm_judge_scores_malformed_json_as_a_failure():
+    verdict = LLMJudge(BrokenJudgeLLM()).score("q", "a", EVIDENCE)
+    assert (verdict.groundedness, verdict.helpfulness) == (1, 1) and "unusable" in verdict.reason
+
+
+def test_eval_with_no_cases_says_so(tmp_path, monkeypatch, capsys):
+    from cartwise.cli import main
+
+    monkeypatch.chdir(tmp_path)
+    assert main(["eval"]) == 2
+    assert "No eval cases found" in capsys.readouterr().err
+
+
+class OverexcitedJudgeLLM:
+    provider, model = "test", "judge"
+
+    def generate(self, system, messages, tools):
+        return LLMResponse(text='{"groundedness": 9, "helpfulness": 0, "reason": "off the scale"}')
+
+
+def test_llm_judge_clamps_scores_to_the_scale():
+    verdict = LLMJudge(OverexcitedJudgeLLM()).score("q", "a", EVIDENCE)
+    assert (verdict.groundedness, verdict.helpfulness) == (5, 1)
